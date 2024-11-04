@@ -3,90 +3,69 @@ pipeline {
     
     environment {
         SONARQUBE_SERVER = 'http://localhost:9000' // Adresse du serveur SonarQube
-        SONARQUBE_ENV = 'sonarqube_server'  //j'ai ajouté pour resoudre le probleme du pipeline
-        NVD_API_KEY = '64691a96-6e92-4d85-9a28-ed4cf7fdba42' // Replace with your actual NVD API key
-         
+        SONARQUBE_ENV = 'sonarqube_server'
+        NVD_API_KEY = '64691a96-6e92-4d85-9a28-ed4cf7fdba42' // Remplacez par votre clé API NVD réelle
     }
-    
+
     stages {
-        stage('GIT') {
+        stage('Git checkout') {
             steps {
-                // Cloner le dépôt depuis GitHub
                 git url: 'https://github.com/5NIDS2-G2/5NIDS2_G2_tp_foyer.git', branch: 'IssaAliAhmat_5NIDS2_G2'
             }
         }
-        
-        stage('Clean') {
+
+        stage('Build, Compile & Test') {
             steps {
                 script {
                     sh 'mvn clean'
-                }
-            }
-        }
-        
-        stage('Compiling') {
-            steps {
-                script {
                     sh 'mvn compile'
-                }
-            }
-        }
-        
-        stage('Unit Test') {
-            steps {
-                script {
                     sh 'mvn test'
                 }
             }
         }
-        
-      stage('Dependency Check') {
-    steps {
-        script {
-            sh """
-                mvn -X -B org.owasp:dependency-check-maven:aggregate \
-                -DnvdApiKey=${NVD_API_KEY} \
-                -DfailBuildOnCVSS=11 \
-                -Dformats=XML,JSON,HTML \
-                -DautoUpdate=false \
-                -DoutputDirectory=target/dependency-check-report
-            """
-        }
-    }
-}
 
-stage('SonarQube Analysis') {
-    steps {
-        script {
-            withSonarQubeEnv('sonarqube_server') { // Remplacez par le nom correct si nécessaire
-                withCredentials([usernamePassword(credentialsId: 'sonar_login', usernameVariable: 'SONAR_USER', passwordVariable: 'SONAR_PASS')]) {
+        stage('File System Scan') {
+            steps {
+                sh "trivy fs --format table -o trivy-fs-report.html ."
+            }
+        }
+
+        stage('Dependency Check') {
+            steps {
+                script {
                     sh """
-                        mvn -B sonar:sonar \
-                        -Dsonar.dependencyCheck.summarize=true \
-                        -Dsonar.dependencyCheck.jsonReportPath=target/dependency-check-report.json \
-                        -Dsonar.dependencyCheck.xmlReportPath=target/dependency-check-report.xml \
-                        -Dsonar.dependencyCheck.htmlReportPath=target/dependency-check-report.html \
-                        -Dsonar.login=\$SONAR_USER \
-                        -Dsonar.password=\$SONAR_PASS \
-                        -Dsonar.host.url=http://localhost:9000/
+                        mvn -X -B org.owasp:dependency-check-maven:aggregate \
+                        -DnvdApiKey=${NVD_API_KEY} \
+                        -DfailBuildOnCVSS=11 \
+                        -Dformats=XML,JSON,HTML \
+                        -DautoUpdate=false \
+                        -DoutputDirectory=target/dependency-check-report
                     """
                 }
             }
         }
-    }
-}
 
-        
+        stage('SonarQube Analysis') {
+            steps {
+                script {
+                    withSonarQubeEnv('sonarqube_server') {
+                        withCredentials([usernamePassword(credentialsId: 'sonar_login', usernameVariable: 'SONAR_USER', passwordVariable: 'SONAR_PASS')]) {
+                            sh """
+                                mvn -B sonar:sonar \
+                                -Dsonar.dependencyCheck.summarize=true \
+                                -Dsonar.dependencyCheck.jsonReportPath=target/dependency-check-report.json \
+                                -Dsonar.dependencyCheck.xmlReportPath=target/dependency-check-report.xml \
+                                -Dsonar.dependencyCheck.htmlReportPath=target/dependency-check-report.html \
+                                -Dsonar.login=\$SONAR_USER \
+                                -Dsonar.password=\$SONAR_PASS \
+                                -Dsonar.host.url=http://localhost:9000/
+                            """
+                        }
+                    }
+                }
+            }
+        }
 
-
-
-        
-
-        
-        
-       
-      
-        
         stage('Nexus') {
             steps {
                 script {
@@ -94,14 +73,27 @@ stage('SonarQube Analysis') {
                 }
             }
         }
-        
+
         stage('Building image') {
             steps {
-                echo "Creating Docker image"
-                sh "docker build -t haggarahmat/tp-foyer:5.0.0 ."
+                script {
+                    sh "docker build -t haggarahmat/tp-foyer:5.0.0 ."
+                }
             }
         }
-        
+
+        stage('Docker Image Scan') {
+            steps {
+                script {
+                    echo "Downloading Java DB for Trivy"
+                    sh "trivy image --download-java-db-only"
+
+                    echo "Scanning Docker image with Trivy"
+                    sh "trivy image --format table -o trivy-image-report.html haggarahmat/tp-foyer:5.0.0"
+                }
+            }
+        }
+
         stage('Docker Hub') {
             steps {
                 echo "Launching on Docker Hub"
@@ -113,18 +105,18 @@ stage('SonarQube Analysis') {
                 }
             }
         }
-        
+
         stage('Docker Compose') {
             steps {
-                sh'docker compose down'
+                sh 'docker compose down'
                 sh 'docker compose up -d'
             }
         }
-         stage('Cleanup Old Containers') { // Nouveau stage pour arrêter et supprimer les anciens conteneurs
+
+        stage('Remove Old Containers') {
             steps {
                 script {
                     try {
-                        // Remplacer par les noms de conteneurs existants
                         sh 'docker stop devsecopsprojet-app-timesheet-1 devsecopsprojet-mysqldb-1 || true'
                         sh 'docker rm devsecopsprojet-app-timesheet-1 devsecopsprojet-mysqldb-1 || true'
                     } catch (Exception e) {
@@ -135,8 +127,6 @@ stage('SonarQube Analysis') {
                 }
             }
         }
-
-       
     } // Fin des stages
 
     post {
@@ -159,14 +149,15 @@ stage('SonarQube Analysis') {
                     </body>
                     </html>
                 """
-                
+
                 emailext (
                     subject: "${jobName} - Build ${buildNumber} - ${pipelineStatus.toUpperCase()}",
                     body: body,
                     to: 'ahmat.issaali@esprit.tn',
                     from: 'jenkins@gmail.com',
                     replyTo: 'jenkins@gmail.com',
-                    mimeType: 'text/html'
+                    mimeType: 'text/html',
+                    attachmentsPattern: 'trivy-image-report.html'
                 )
             }
         }
