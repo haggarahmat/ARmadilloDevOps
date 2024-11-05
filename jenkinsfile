@@ -4,7 +4,7 @@ pipeline {
     environment {
         SONARQUBE_SERVER = 'http://localhost:9000' // Adresse du serveur SonarQube
         SONARQUBE_ENV = 'sonarqube_server'
-        NVD_API_KEY = '64691a96-6e92-4d85-9a28-ed4cf7fdba42' // Remplacez par votre clé API NVD réelle
+        NVD_API_KEY = 'Your key api' // Remplacez par votre clé API NVD réelle
     }
 
     stages {
@@ -100,7 +100,7 @@ pipeline {
                 echo "Launching on Docker Hub"
                 script {
                     sh """
-                        docker login -u haggarahmat -p fidelite2011
+                        docker login -u "username" -p "your password"
                         docker push haggarahmat/tp-foyer:5.0.0
                     """
                 }
@@ -154,7 +154,7 @@ pipeline {
                 emailext (
                     subject: "${jobName} - Build ${buildNumber} - ${pipelineStatus.toUpperCase()}",
                     body: body,
-                    to: 'ahmat.issaali@esprit.tn',
+                    to: 'Your email',
                     from: 'jenkins@gmail.com',
                     replyTo: 'jenkins@gmail.com',
                     mimeType: 'text/html',
