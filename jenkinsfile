@@ -41,6 +41,7 @@ pipeline {
                         -DautoUpdate=false \
                         -DoutputDirectory=target/dependency-check-report
                     """
+                    
                 }
             }
         }
@@ -158,6 +159,7 @@ pipeline {
                     replyTo: 'jenkins@gmail.com',
                     mimeType: 'text/html',
                     attachmentsPattern: 'trivy-image-report.html'
+                   
                 )
             }
         }
