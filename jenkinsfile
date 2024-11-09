@@ -1,25 +1,166 @@
 pipeline {
     agent any
+    
+    environment {
+        SONARQUBE_SERVER = 'http://localhost:9000' // Adresse du serveur SonarQube
+        SONARQUBE_ENV = 'sonarqube_server'
+        NVD_API_KEY = 'Your key api' // Remplacez par votre clé API NVD réelle
+    }
 
     stages {
-        stage('Hello') {
+        stage('Git checkout') {
             steps {
-                echo 'Hello World'
+                git url: 'https://github.com/5NIDS2-G2/5NIDS2_G2_tp_foyer.git', branch: 'IssaAliAhmat_5NIDS2_G2'
             }
         }
-        stage('Build') {
+
+        stage('Build, Compile & Test') {
             steps {
-                echo 'Building'
+                script {
+                    sh 'mvn clean'
+                    sh 'mvn compile'
+                    sh 'mvn test'
+                }
             }
         }
-        stage('Test') {
+
+        stage('File System Scan') {
             steps {
-                echo 'Testing'
+                sh "trivy fs --format table -o trivy-fs-report.html ."
             }
         }
-        stage('Deploy') {
+
+        stage('Dependency Check') {
             steps {
-                echo 'Deploying'
+                script {
+                    sh """
+                        mvn -X -B org.owasp:dependency-check-maven:aggregate \
+                        -DnvdApiKey=${NVD_API_KEY} \
+                        -DfailBuildOnCVSS=11 \
+                        -Dformats=XML,JSON,HTML \
+                        -DautoUpdate=false \
+                        -DoutputDirectory=target/dependency-check-report
+                    """
+                    
+                }
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                script {
+                    withSonarQubeEnv('sonarqube_server') {
+                        withCredentials([usernamePassword(credentialsId: 'sonar_login', usernameVariable: 'SONAR_USER', passwordVariable: 'SONAR_PASS')]) {
+                            sh """
+                                mvn -B sonar:sonar \
+                                -Dsonar.dependencyCheck.summarize=true \
+                                -Dsonar.dependencyCheck.jsonReportPath=target/dependency-check-report.json \
+                                -Dsonar.dependencyCheck.xmlReportPath=target/dependency-check-report.xml \
+                                -Dsonar.dependencyCheck.htmlReportPath=target/dependency-check-report.html \
+                                -Dsonar.login=\$SONAR_USER \
+                                -Dsonar.password=\$SONAR_PASS \
+                                -Dsonar.host.url=http://localhost:9000/
+                            """
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Nexus') {
+            steps {
+                script {
+                    sh 'mvn deploy -Dmaven.test.skip'
+                }
+            }
+        }
+
+        stage('Building image') {
+            steps {
+                script {
+                    sh "docker build -t haggarahmat/tp-foyer:5.0.0 ."
+                }
+            }
+        }
+
+        stage('Docker Image Scan') {
+            steps {
+                script {
+                    echo "Downloading Java DB for Trivy"
+                    sh "trivy image --download-java-db-only"
+
+                    echo "Scanning Docker image with Trivy"
+                    sh "trivy image --format table -o trivy-image-report.html haggarahmat/tp-foyer:5.0.0"
+                }
+            }
+        }
+
+        stage('Docker Hub') {
+            steps {
+                echo "Launching on Docker Hub"
+                script {
+                    sh """
+                        docker login -u "username" -p "your password"
+                        docker push haggarahmat/tp-foyer:5.0.0
+                    """
+                }
+            }
+        }
+
+        stage('Docker Compose') {
+            steps {
+                sh 'docker compose down'
+                sh 'docker compose up -d'
+            }
+        }
+
+        stage('Remove Old Containers') {
+            steps {
+                script {
+                    try {
+                        sh 'docker stop devsecopsprojet-app-timesheet-1 devsecopsprojet-mysqldb-1 || true'
+                        sh 'docker rm devsecopsprojet-app-timesheet-1 devsecopsprojet-mysqldb-1 || true'
+                    } catch (Exception e) {
+                        echo "Error occurred while removing old Docker containers: ${e.message}"
+                        currentBuild.result = 'FAILURE'
+                        error("Failed to remove old Docker containers")
+                    }
+                }
+            }
+        }
+    } // Fin des stages
+
+    post {
+        always {
+            script {
+                def jobName = env.JOB_NAME
+                def buildNumber = env.BUILD_NUMBER
+                def pipelineStatus = currentBuild.result ?: 'UNKNOWN'
+                def bannerColor = pipelineStatus.toUpperCase() == 'SUCCESS' ? 'green' : 'red'
+                def body = """
+                    <html>
+                    <body>
+                    <div style="border: 4px solid ${bannerColor}; padding: 10px;">
+                    <h2>${jobName} - Build ${buildNumber}</h2>
+                    <div style="background-color: ${bannerColor}; padding: 10px;">
+                    <h3 style="color: white;">Pipeline Status: ${pipelineStatus.toUpperCase()}</h3>
+                    </div>
+                    <p>Check the <a href="${env.BUILD_URL}">console output</a>.</p>
+                    </div>
+                    </body>
+                    </html>
+                """
+
+                emailext (
+                    subject: "${jobName} - Build ${buildNumber} - ${pipelineStatus.toUpperCase()}",
+                    body: body,
+                    to: 'Your email',
+                    from: 'jenkins@gmail.com',
+                    replyTo: 'jenkins@gmail.com',
+                    mimeType: 'text/html',
+                    attachmentsPattern: 'trivy-image-report.html'
+                   
+                )
             }
         }
     }
